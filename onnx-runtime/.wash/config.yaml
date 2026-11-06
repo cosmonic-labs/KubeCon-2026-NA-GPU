@@ -1,0 +1,14 @@
+build:
+  # Plugs in the prebuilt ONNX Runtime component from vendor/ (see onnxruntime.wit).
+  command: >-
+    cargo build --target wasm32-wasip3 --release &&
+    wac plug target/wasm32-wasip3/release/sd_turbo.wasm --plug vendor/onnxruntime.wasm -o target/sd-turbo.wasm
+  component_path: target/sd-turbo.wasm
+
+dev:
+  wasi_webgpu: true
+  # ONNX Runtime uses wasm exceptions, and both components use the async component model.
+  wasm_proposals: [exception-handling, component-model-async]
+  volumes:
+    - host_path: models
+      guest_path: /models

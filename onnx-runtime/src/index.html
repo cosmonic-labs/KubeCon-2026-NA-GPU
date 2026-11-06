@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SD-Turbo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 560px; margin: 40px auto; padding: 0 16px; }
+    form { display: flex; gap: 8px; }
+    input { flex: 1; padding: 8px; font-size: 16px; }
+    button { padding: 8px 16px; font-size: 16px; }
+    img { margin-top: 16px; width: 100%; aspect-ratio: 1; background: #eee; border-radius: 8px; }
+    #status { margin-top: 8px; color: #666; }
+  </style>
+</head>
+<body>
+  <h1>SD-Turbo</h1>
+  <form id="form">
+    <input id="prompt" value="Oil painting depicting historic European architecture" autofocus>
+    <button>Generate</button>
+  </form>
+  <div id="status"></div>
+  <img id="image" alt="">
+  <script>
+    const form = document.getElementById("form");
+    const status = document.getElementById("status");
+    const image = document.getElementById("image");
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const prompt = document.getElementById("prompt").value;
+      status.textContent = "generating...";
+      const start = performance.now();
+      const response = await fetch("/generate?prompt=" + encodeURIComponent(prompt));
+      if (!response.ok) {
+        status.textContent = await response.text();
+        return;
+      }
+      URL.revokeObjectURL(image.src);
+      image.src = URL.createObjectURL(await response.blob());
+      status.textContent = `done in ${((performance.now() - start) / 1000).toFixed(1)} s`;
+    });
+  </script>
+</body>
+</html>

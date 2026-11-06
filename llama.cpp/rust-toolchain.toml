@@ -1,0 +1,3 @@
+[toolchain]
+channel = "nightly-2026-10-13"
+targets = ["wasm32-wasip3"]

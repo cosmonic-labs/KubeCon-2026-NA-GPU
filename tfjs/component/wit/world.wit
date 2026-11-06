@@ -1,0 +1,12 @@
+package wasmcloud:webgpu-tensorflow@0.1.0;
+
+world component {
+  // Loopback TCP client to reach the style-transfer service on 127.0.0.1:7878
+  import wasi:sockets/types@0.3.0;
+
+  // Backs the console polyfill
+  import wasi:cli/stdout@0.3.0;
+  import wasi:cli/stderr@0.3.0;
+
+  export wasi:http/handler@0.3.0;
+}
