@@ -1,0 +1,157 @@
+name: components
+
+# Builds every demo component with `wash build`. Pushes to main publish each one to
+# ghcr.io/cosmonic-labs/kubecon-2026-na-gpu/<name> as `main` and `sha-<commit>`, and a
+# `v*` tag publishes it as that version (v1.2.0 → 1.2.0). Each published image gets a
+# build provenance attestation.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+env:
+  WASH_VERSION: v2.12.1
+  WAC_VERSION: v0.12.0
+  WAC_SHA256: 7cd490edbd452221ef89e6750fc43eacc9b71b1242095eb577cb9a3bf0d3beda
+  IMAGE_PREFIX: ghcr.io/cosmonic-labs/kubecon-2026-na-gpu
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read # check out the demos
+      packages: write # push to ghcr.io; a fork's pull request gets a read-only token
+      id-token: write # sign the provenance attestation
+      attestations: write # store the provenance attestation
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: llama-chat
+            workdir: llama.cpp
+            artifact: target/llama-chat.wasm
+            toolchain: rust
+          - name: sd-turbo
+            workdir: onnx-runtime
+            artifact: target/sd-turbo.wasm
+            toolchain: rust
+          # One `wash build` in tfjs/ builds both of its components.
+          - name: tfjs-component
+            workdir: tfjs
+            artifact: component/dist/component.wasm
+            toolchain: node
+          - name: tfjs-service
+            workdir: tfjs
+            artifact: service/dist/service.wasm
+            toolchain: node
+    env:
+      PUBLISH: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain from rust-toolchain.toml
+        if: matrix.toolchain == 'rust'
+        working-directory: ${{ matrix.workdir }}
+        run: rustup toolchain install
+
+      - name: Install wac
+        if: matrix.toolchain == 'rust'
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl -fsSL -o "${RUNNER_TEMP}/bin/wac" \
+            "https://github.com/bytecodealliance/wac/releases/download/${WAC_VERSION}/wac-cli-x86_64-unknown-linux-musl"
+          echo "${WAC_SHA256}  ${RUNNER_TEMP}/bin/wac" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/bin/wac"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Install Node.js from .nvmrc
+        if: matrix.toolchain == 'node'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: tfjs/.nvmrc
+          # This job publishes, so it doesn't restore caches a pull request could have written.
+          package-manager-cache: false
+
+      - name: Install npm dependencies
+        if: matrix.toolchain == 'node'
+        working-directory: ${{ matrix.workdir }}
+        run: npm ci --no-audit --no-fund
+
+      - uses: wasmcloud/setup-wash-action@47756fa211cc82f392c57e39504f43ef46fc0b3e # v2.1.0
+        with:
+          wash-version: ${{ env.WASH_VERSION }}
+
+      - name: Build
+        working-directory: ${{ matrix.workdir }}
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          set -euo pipefail
+          wash build
+          test -f "${ARTIFACT}"
+
+      - name: Log in to ghcr.io
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Each `wash oci push` stamps a new creation time into the manifest, so the extra
+      # tags are added to the pushed manifest with `oras tag` rather than pushed again.
+      - name: Install oras
+        if: env.PUBLISH == 'true' && github.ref_type != 'tag'
+        uses: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63 # v2.0.3
+
+      - name: Publish
+        id: publish
+        if: env.PUBLISH == 'true'
+        working-directory: ${{ matrix.workdir }}
+        env:
+          IMAGE: ${{ env.IMAGE_PREFIX }}/${{ matrix.name }}
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tags=("${GITHUB_REF_NAME#v}")
+          else
+            tags=("sha-${GITHUB_SHA::12}" "main")
+          fi
+          out=$(wash -o json oci push "${IMAGE}:${tags[0]}" "${ARTIFACT}")
+          echo "${out}"
+          digest=$(jq -r '.data.digest // empty' <<<"${out}")
+          if [[ -z "${digest}" ]]; then
+            echo "wash oci push did not report a digest for ${IMAGE}:${tags[0]}" >&2
+            exit 1
+          fi
+          if (( ${#tags[@]} > 1 )); then
+            oras tag "${IMAGE}@${digest}" "${tags[@]:1}"
+          fi
+          echo "image=${IMAGE}" >> "${GITHUB_OUTPUT}"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+          echo "Published ${IMAGE}@${digest} as ${tags[*]}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Attest build provenance
+        if: env.PUBLISH == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.publish.outputs.image }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
