@@ -1,0 +1,60 @@
+# The wasmCloud runtime operator (oci://ghcr.io/wasmcloud/charts/runtime-operator
+# 2.12.1) on a one-node kind cluster, with one host group for the demos.
+#
+# up.sh installs it with this file. The host group serves HTTP on NodePort
+# 30080, which the kind config maps to http://localhost:8000; each workload
+# answers on its own *.localhost name.
+
+# kind's CNI drops DNS from pods under the chart's NetworkPolicies.
+networkPolicy:
+  enabled: false
+
+gateway:
+  enabled: false
+
+runtime:
+  image:
+    # The host image is built locally and loaded into kind, never pulled.
+    pull_policy: IfNotPresent
+  hostGroups:
+    - name: gpu
+      replicas: 1
+      # Dockerfile: the stock host plus lavapipe.
+      image:
+        registry: localhost
+        repository: wasmcloud-host-lavapipe
+        tag: "2.12.1"
+      webgpu:
+        enabled: true
+      # sd-turbo's ONNX Runtime needs both; the TensorFlow.js demo needs async.
+      wasmProposals:
+        - exception-handling
+        - component-model-async
+      service:
+        type: NodePort
+      http:
+        enabled: true
+        port: 9191
+        nodePort: 30080
+      # sd-turbo reads its model files from /models, a directory on your
+      # machine mounted into the kind node (up.sh) and then into this pod.
+      hostPaths:
+        allowed:
+          - /models
+      volumes:
+        - name: models
+          hostPath:
+            path: /models
+            type: Directory
+      volumeMounts:
+        - name: models
+          mountPath: /models
+          readOnly: true
+      # The sd-turbo models are about 2.5 GB and are read into guest memory;
+      # the chart's 768Mi default is for small components.
+      resources:
+        requests:
+          cpu: "1"
+          memory: 1Gi
+        limits:
+          memory: 10Gi
