@@ -1,5 +1,5 @@
 package kubecon:llama-chat;
 
 world chat {
-    import cosmonic:llama-cpp/api@0.8.0-large-models.1;
+    import cosmonic:llama-cpp/api@0.8.0-rc.2;
 }
