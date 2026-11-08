@@ -1,0 +1,17 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local secrets
+.env
+.env.*
+
+# Build output and logs, for every demo
+target/
+node_modules/
+dist/
+*.log
