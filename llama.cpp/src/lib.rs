@@ -18,7 +18,7 @@ mod engine;
 
 use serde::Deserialize;
 use wasip3::http::types::{ErrorCode, Fields, Method, Request, Response};
-use wasip3::{wit_future, wit_stream as http_stream};
+use wasip3::{wit_future as http_future, wit_stream as http_stream};
 use wit_bindgen::StreamResult;
 
 const INDEX_HTML: &str = include_str!("index.html");
@@ -89,7 +89,7 @@ fn parse(body: &[u8]) -> Result<Vec<engine::Message>, String> {
 
 /// Reads the request body, or returns `None` if it is over [`MAX_BODY`].
 async fn read_body(request: Request) -> Option<Vec<u8>> {
-    let (_result_tx, result_rx) = wit_future::new(|| Ok(()));
+    let (_result_tx, result_rx) = http_future::new(|| Ok(()));
     let (mut stream, _trailers) = Request::consume_body(request, result_rx);
     let mut body = Vec::new();
     loop {
@@ -122,6 +122,6 @@ fn new_response(
 ) -> Result<(Response, wit_bindgen::FutureReader<Result<(), ErrorCode>>), ErrorCode> {
     let headers = Fields::from_list(&[("content-type".to_string(), content_type.as_bytes().to_vec())])
         .map_err(|err| ErrorCode::InternalError(Some(format!("invalid headers: {err}"))))?;
-    let (_trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (_trailers_tx, trailers_rx) = http_future::new(|| Ok(None));
     Ok(Response::new(headers, Some(body), trailers_rx))
 }

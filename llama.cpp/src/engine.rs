@@ -3,6 +3,7 @@
 //! llama.h leaves generation to the caller: apply the chat template, tokenize, decode, then
 //! sample a token and decode it, until the model ends its turn.
 
+use std::future::IntoFuture;
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -115,7 +116,7 @@ pub async fn chat(messages: Vec<Message>, mut events: Events) {
     if let Err(message) = engine.reply(messages, &mut events).await {
         eprintln!("error: {message}");
         // The context may be out of step with `tokens`.
-        engine.ctx.memory_clear(true);
+        engine.ctx.memory_clear(true).await;
         engine.tokens.clear();
         events.send(Event::Error { message }).await;
     }
@@ -139,8 +140,15 @@ impl Engine {
 
         // The file goes straight from the host to the engine, without passing through this
         // component's memory.
-        let (data, _read_result) = file.read_via_stream(0);
-        let model = Model::create(data, size, Some(ModelParams { n_gpu_layers: -1 })).await?;
+        let (data, read_result) = file.read_via_stream(0);
+        let (mut loaded, model) = Model::create(data, size, Some(ModelParams { n_gpu_layers: -1 })).await;
+        // The engine reports how much of the file it has loaded; nothing here shows it.
+        let progress = async { while loaded.next().await.is_some() {} };
+        let ((), model, read) = futures::future::join3(progress, model.into_future(), read_result.into_future()).await;
+        // A failed read ends the stream early, so the engine's error would only say the file
+        // was short.
+        read.map_err(|err| format!("{MODELS_DIR}/{MODEL_FILE}: {err:?}"))?;
+        let model = model?;
         let n_ctx = match model.n_ctx_train() {
             0 => CONTEXT_LENGTH,
             trained => trained.min(CONTEXT_LENGTH),
@@ -153,7 +161,7 @@ impl Engine {
 
     async fn reply(&mut self, messages: Vec<Message>, events: &mut Events) -> Result<(), String> {
         let (prompt, dropped_messages) = self.prompt(messages)?;
-        let cached_tokens = self.reuse_prefix(&prompt);
+        let cached_tokens = self.reuse_prefix(&prompt).await;
         self.decode(&prompt[cached_tokens..]).await?;
 
         let sampler = sampler()?;
@@ -219,7 +227,7 @@ impl Engine {
 
     /// Keeps what the context shares with `prompt`, and returns how many tokens that is. The last
     /// token of the prompt is always decoded again, as sampling needs its logits.
-    fn reuse_prefix(&mut self, prompt: &[u32]) -> usize {
+    async fn reuse_prefix(&mut self, prompt: &[u32]) -> usize {
         let shared = self.tokens.iter().zip(prompt).take_while(|(held, wanted)| held == wanted).count();
         let shared = shared.min(prompt.len().saturating_sub(1));
         // With sliding-window attention, the first token after the prefix attends to the n-swa
@@ -234,7 +242,7 @@ impl Engine {
             self.tokens.truncate(shared);
             shared
         } else {
-            self.ctx.memory_clear(true);
+            self.ctx.memory_clear(true).await;
             self.tokens.clear();
             0
         }
