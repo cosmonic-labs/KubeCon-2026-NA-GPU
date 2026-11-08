@@ -1,0 +1,230 @@
+package onnxruntime:onnxruntime@0.1.0;
+
+/// Values exchanged with sessions. Mirrors OrtValue and the tensor types of the C, C++ and JavaScript APIs.
+@since(version = 0.1.0)
+interface types {
+  /// Mirrors OrtErrorCode.
+  @since(version = 0.1.0)
+  variant error-code {
+    /// ORT_FAIL.
+    fail,
+    /// ORT_INVALID_ARGUMENT.
+    invalid-argument,
+    /// ORT_NO_SUCHFILE.
+    no-such-file,
+    /// ORT_NO_MODEL.
+    no-model,
+    /// ORT_ENGINE_ERROR.
+    engine-error,
+    /// ORT_RUNTIME_EXCEPTION.
+    runtime-exception,
+    /// ORT_INVALID_PROTOBUF.
+    invalid-protobuf,
+    /// ORT_MODEL_LOADED.
+    model-loaded,
+    /// ORT_NOT_IMPLEMENTED.
+    not-implemented,
+    /// ORT_INVALID_GRAPH.
+    invalid-graph,
+    /// ORT_EP_FAIL.
+    ep-fail,
+    /// A catch-all for errors not captured by the existing cases.
+    other(option<string>),
+  }
+
+  /// An error and its message.
+  @since(version = 0.1.0)
+  record error {
+    code: error-code,
+    message: string,
+  }
+
+  /// Mirrors ONNXTensorElementDataType.
+  @since(version = 0.1.0)
+  variant tensor-element-type {
+    %float32,
+    float16,
+    bfloat16,
+    %float64,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    %bool,
+    %string,
+    /// A catch-all for types not captured by the existing cases.
+    other(option<string>),
+  }
+
+  /// Where a tensor's data lives. Mirrors the device of OrtMemoryInfo.
+  @since(version = 0.1.0)
+  variant device-type {
+    cpu,
+    gpu,
+    /// A catch-all for devices not captured by the existing cases.
+    other(option<string>),
+  }
+
+  /// A tensor. Mirrors Tensor in the JavaScript API.
+  @since(version = 0.1.0)
+  resource tensor {
+    /// Creates a CPU tensor from little-endian element data.
+    from-data: static async func(element-type: tensor-element-type, dims: list<s64>, data: list<u8>) -> result<tensor, error>;
+    /// Creates a CPU tensor of strings.
+    from-strings: static async func(dims: list<s64>, data: list<string>) -> result<tensor, error>;
+    /// The type of the elements.
+    get-element-type: async func() -> tensor-element-type;
+    /// The size of each dimension.
+    get-dims: async func() -> list<s64>;
+    /// Where the data lives.
+    get-location: async func() -> device-type;
+    /// The element data as little-endian bytes. Copies GPU data to the CPU.
+    /// Fails for string tensors, use `get-strings` instead.
+    get-data: async func() -> result<list<u8>, error>;
+    /// The elements of a string tensor.
+    get-strings: async func() -> result<list<string>, error>;
+  }
+
+  /// A tensor's shape, as declared by the model.
+  @since(version = 0.1.0)
+  variant dimension {
+    /// A dimension of a fixed size.
+    fixed(s64),
+    /// A dimension that is only known at run time, such as a batch size.
+    symbolic(string),
+  }
+
+  /// Describes a model input or output. Mirrors InferenceSession.ValueMetadata in the JavaScript API.
+  @since(version = 0.1.0)
+  record value-metadata {
+    name: string,
+    /// None for values that are not tensors, such as sequences and maps.
+    element-type: option<tensor-element-type>,
+    shape: option<list<dimension>>,
+  }
+}
+
+/// Loading and running models. Mirrors InferenceSession in the JavaScript API and OrtSession in the C API.
+@since(version = 0.1.0)
+interface inference-session {
+  use types.{error, tensor, device-type, value-metadata};
+
+  /// Mirrors GraphOptimizationLevel.
+  @since(version = 0.1.0)
+  variant graph-optimization-level {
+    disabled,
+    basic,
+    extended,
+    layout,
+    all,
+    /// A catch-all for levels not captured by the existing cases.
+    other(option<string>),
+  }
+
+  /// Mirrors ExecutionMode.
+  @since(version = 0.1.0)
+  enum execution-mode {
+    sequential,
+    parallel,
+  }
+
+  /// Mirrors OrtLoggingLevel.
+  @since(version = 0.1.0)
+  enum log-severity {
+    verbose,
+    info,
+    warning,
+    error,
+    fatal,
+  }
+
+  /// An execution provider and its options, such as `cpu` or `webgpu`.
+  /// The options are the provider's string key/value options, as in the C API.
+  @since(version = 0.1.0)
+  record execution-provider {
+    name: string,
+    options: list<tuple<string, string>>,
+  }
+
+  /// Mirrors InferenceSession.SessionOptions in the JavaScript API.
+  @since(version = 0.1.0)
+  record session-options {
+    /// In order of preference.
+    execution-providers: list<execution-provider>,
+    graph-optimization-level: option<graph-optimization-level>,
+    execution-mode: option<execution-mode>,
+    intra-op-num-threads: option<u32>,
+    free-dimension-overrides: list<tuple<string, s64>>,
+    log-id: option<string>,
+    log-severity-level: option<log-severity>,
+    /// Session configuration entries, as passed to AddSessionConfigEntry in the C API.
+    config-entries: list<tuple<string, string>>,
+  }
+
+  /// Mirrors InferenceSession.RunOptions in the JavaScript API.
+  @since(version = 0.1.0)
+  record run-options {
+    tag: option<string>,
+    log-severity-level: option<log-severity>,
+    /// Run configuration entries, as passed to AddRunConfigEntry in the C API.
+    config-entries: list<tuple<string, string>>,
+  }
+
+  /// A loaded model.
+  @since(version = 0.1.0)
+  resource session {
+    /// Loads a model file. External data files are found relative to it.
+    create-from-path: static async func(path: string, options: option<session-options>) -> result<session, error>;
+    /// Loads a model from its bytes. The model cannot use external data files.
+    create-from-stream: static async func(model: stream<u8>, options: option<session-options>) -> result<session, error>;
+    /// The model's inputs.
+    get-input-metadata: async func() -> list<value-metadata>;
+    /// The model's outputs.
+    get-output-metadata: async func() -> list<value-metadata>;
+    /// Runs the model. `fetches` are the outputs to compute, all outputs if none.
+    run: async func(feeds: list<tuple<string, borrow<tensor>>>, fetches: option<list<string>>, options: option<run-options>) -> result<list<tuple<string, tensor>>, error>;
+    /// Runs the model with inputs and outputs from an io-binding.
+    run-with-binding: async func(binding: borrow<io-binding>, options: option<run-options>) -> result<_, error>;
+  }
+
+  /// Binds inputs and outputs to a session ahead of a run, so that they can stay on a device across runs.
+  /// Mirrors OrtIoBinding in the C API.
+  @since(version = 0.1.0)
+  resource io-binding {
+    /// Creates an empty binding for `session`.
+    constructor(session: borrow<session>);
+    /// Binds `value` to the input `name`.
+    bind-input: async func(name: string, value: borrow<tensor>) -> result<_, error>;
+    /// Has the session write the output into `value`.
+    bind-output: async func(name: string, value: borrow<tensor>) -> result<_, error>;
+    /// Has the session allocate the output on `device`.
+    bind-output-to-device: async func(name: string, device: device-type) -> result<_, error>;
+    /// The outputs of the last run-with-binding.
+    get-bound-outputs: async func() -> result<list<tuple<string, tensor>>, error>;
+    /// Removes all bound inputs.
+    clear-bound-inputs: async func();
+    /// Removes all bound outputs.
+    clear-bound-outputs: async func();
+  }
+}
+
+/// The imports of a component that runs models.
+@since(version = 0.1.0)
+world imports {
+  @since(version = 0.1.0)
+  import types;
+  @since(version = 0.1.0)
+  import inference-session;
+}
+/// The exports of an implementation.
+@since(version = 0.1.0)
+world onnxruntime {
+  @since(version = 0.1.0)
+  export types;
+  @since(version = 0.1.0)
+  export inference-session;
+}
