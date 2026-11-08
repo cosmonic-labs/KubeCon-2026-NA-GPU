@@ -1,0 +1,38 @@
+# SD-Turbo image generation (../../onnx-runtime) at http://sd-turbo.localhost:8000.
+#
+# ONNX Runtime runs the model on the GPU through wasi:webgpu. The component
+# reads the model files from /models, the host directory up.sh mounts from
+# onnx-runtime/models; it is granted that directory read-only and nothing else.
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: sd-turbo
+  namespace: default
+spec:
+  replicas: 1
+  template:
+    spec:
+      hostSelector:
+        hostgroup: gpu
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces: [handler]
+          config:
+            host: sd-turbo.localhost
+        # The host links wasi:webgpu only for workloads that list it.
+        - namespace: wasi
+          package: webgpu
+          interfaces: [webgpu]
+      volumes:
+        - name: models
+          hostPath:
+            path: /models
+      components:
+        - name: sd-turbo
+          image: ghcr.io/cosmonic-labs/kubecon-2026-na-gpu/sd-turbo:main
+          localResources:
+            volumeMounts:
+              - name: models
+                mountPath: /models
+                readOnly: true

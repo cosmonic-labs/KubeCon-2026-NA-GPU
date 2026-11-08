@@ -1,0 +1,33 @@
+# TensorFlow.js style transfer (../../tfjs) at http://style.localhost:8000.
+#
+# The service is a long-running wasi:cli/run component: it loads the style
+# models once and runs them on the GPU through wasi:webgpu, listening on
+# 127.0.0.1:7878. The HTTP component serves the page and sends each
+# /stylize request to that port. 127.0.0.1 is the workload's own virtual
+# network: the component reaches its service and nothing else.
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: tfjs
+  namespace: default
+spec:
+  replicas: 1
+  template:
+    spec:
+      hostSelector:
+        hostgroup: gpu
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces: [handler]
+          config:
+            host: style.localhost
+        # The host links wasi:webgpu only for workloads that list it.
+        - namespace: wasi
+          package: webgpu
+          interfaces: [webgpu]
+      service:
+        image: ghcr.io/cosmonic-labs/kubecon-2026-na-gpu/tfjs-service:main
+      components:
+        - name: tfjs
+          image: ghcr.io/cosmonic-labs/kubecon-2026-na-gpu/tfjs-component:main

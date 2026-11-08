@@ -15,7 +15,7 @@ All of them need [`wash`](https://wasmcloud.com/docs/installation) and a machine
 
 ## Run them on Kubernetes
 
-Each demo runs locally with `wash dev`. To run wasmCloud workloads on a Kubernetes cluster, see the [wasmCloud Kubernetes docs](https://wasmcloud.com/docs/kubernetes/).
+Each demo runs locally with `wash dev`. To run the ONNX Runtime and TensorFlow.js demos on a local kind cluster, see [deploy/kubernetes](deploy/kubernetes/). For wasmCloud on Kubernetes in general, see the [wasmCloud Kubernetes docs](https://wasmcloud.com/docs/kubernetes/).
 
 ## Learn more
 
