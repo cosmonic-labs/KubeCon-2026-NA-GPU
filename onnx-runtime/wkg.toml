@@ -1,0 +1,4 @@
+# The ONNX Runtime component in vendor/ was built from this interface, so resolve it from
+# the copy next to the component rather than a registry.
+[overrides]
+"onnxruntime:onnxruntime" = { path = "vendor/wit/onnxruntime" }

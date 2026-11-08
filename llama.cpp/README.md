@@ -26,7 +26,7 @@ To use another GGUF with a chat template, change `MODEL_FILE` in [`src/engine.rs
 - [`src/lib.rs`](src/lib.rs) serves the page and `POST /chat`, which streams the reply as one JSON event per line.
 - [`src/engine.rs`](src/engine.rs) holds the model and does what `llama.h` leaves to the caller: templating, decoding, sampling, and reusing the tokens a new prompt shares with the last one.
 - [`src/index.html`](src/index.html) is the chat page. It keeps the conversation and sends all of it with each message.
-- [`vendor/llama-cpp.wasm`](vendor/) is the llama.cpp engine, built from `llama.wit`, and [`wit/deps/llama-cpp/`](wit/deps/llama-cpp/) is its interface. The build plugs it into this component with `wac`.
+- [`vendor/llama-cpp.wasm`](vendor/) is the llama.cpp engine, built from `llama.wit`, and [`vendor/wit/llama-cpp/`](vendor/wit/llama-cpp/) is its interface, which [`wkg.toml`](wkg.toml) points `wash build` at. The build plugs the engine into this component with `wac`.
 
 The component exports both `wasi:cli/run` and `wasi:http/handler`, and `service_file` in [`.wash/config.yaml`](.wash/config.yaml) runs it as a service. An HTTP component gets a new instance per request and would reload the model for every message. A service has one instance, so the model and the conversation's tokens stay loaded.
 
