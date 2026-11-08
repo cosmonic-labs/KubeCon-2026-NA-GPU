@@ -3,6 +3,7 @@
 Demos from our talk **GPU Portability Was Broken, But Now There's WebGPU**, by Bailey Hayes and Mendy Berger, at Cloud Native AI + Inference Day North America 2026, co-located with KubeCon + CloudNativeCon North America. Each one runs machine learning on the GPU from inside a WebAssembly component on [wasmCloud](https://github.com/wasmCloud/wasmCloud), a CNCF incubating project, using `wasi:webgpu`.
 
 - [Slides](https://docs.google.com/presentation/d/1XSuhDqWWACD6UbhuxEaW_ebqrtHIU-ECw8BWaz27JJE/edit?usp=sharing)
+- [Demo videos](https://drive.google.com/drive/folders/1Bwp5kfoMeG3n4zAbteudTW1h-HJkEXA1?usp=sharing): recordings of each demo running, if you'd rather watch than run them.
 - [GPU benchmarks](https://arewefastyet.wasmcloud.com/gpu.html): one model on one GPU three ways (the vendor backend, WebGPU as a native binary, and the same WebGPU build as a Wasm component), then several models taking turns on one GPU.
 
 | Demo | What it does |
