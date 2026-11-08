@@ -24,11 +24,30 @@
     background: var(--bg); color: var(--text);
     font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  header, footer, #messages { width: 100%; max-width: 46rem; margin-inline: auto; }
+  header, #model-bar, footer, #messages { width: 100%; max-width: 46rem; margin-inline: auto; }
   header {
     display: flex; align-items: baseline; gap: .75rem;
     padding: 1rem 1rem .5rem;
   }
+  #model-bar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .75rem;
+    padding: 0 1rem .5rem; font-size: .85rem;
+  }
+  #model-bar label { color: var(--muted); }
+  select {
+    min-width: 0; max-width: 100%; padding: .3rem .5rem;
+    border: 1px solid var(--border); border-radius: .5rem;
+    background: var(--panel); color: inherit; font: inherit;
+  }
+  select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #model-info { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #model-info.loading::before {
+    content: ""; display: inline-block; width: .7em; height: .7em; margin-right: .4em; vertical-align: -.05em;
+    border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(1turn); } }
+  @media (prefers-reduced-motion: reduce) { #model-info.loading::before { animation-duration: 3s; } }
   h1 { margin: 0; font-size: 1.05rem; font-weight: 600; }
   #subtitle { color: var(--muted); font-size: .85rem; }
   #new-chat { margin-left: auto; }
@@ -69,6 +88,11 @@
   <span id="subtitle">WebAssembly on wasi:webgpu</span>
   <button id="new-chat" type="button">New chat</button>
 </header>
+<div id="model-bar">
+  <label for="model">Model</label>
+  <select id="model" disabled><option>Loading the list…</option></select>
+  <span id="model-info" aria-live="polite"></span>
+</div>
 <main id="scroller">
   <div id="messages" aria-live="polite"></div>
 </main>
@@ -88,9 +112,123 @@ const form = document.getElementById("form");
 const input = document.getElementById("input");
 const send = document.getElementById("send");
 const stop = document.getElementById("stop");
+const modelSelect = document.getElementById("model");
+const modelInfo = document.getElementById("model-info");
 
 let history = [];
 let controller = null;
+/// From GET /models: { default, loaded, loading, files: [{ file, bytes }] }.
+let models = null;
+/// The model file being loaded after it was picked, so the page waits for it.
+let switching = null;
+
+function formatBytes(bytes) {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
+  return `${Math.round(bytes / 1e3)} kB`;
+}
+
+const QUANT = /[-_.]((?:I?Q\d|TQ\d)[A-Z0-9_]*|BF16|F16|F32)$/i;
+
+/// "Mistral-Small-24B-Instruct-2501-Q4_K_M.gguf" -> "Mistral-Small-24B". Files keep their
+/// upstream names, so they can be traced to where they were downloaded from.
+function modelName(file) {
+  const name = file.replace(/\.gguf$/i, "").replace(QUANT, "");
+  return name.split(/-/).filter((part) => !/^(instruct|it|chat|\d{4})$/i.test(part)).join("-") || name;
+}
+
+/// "...-Q4_K_M.gguf" -> "Q4_K_M".
+function modelQuant(file) {
+  return file.replace(/\.gguf$/i, "").match(QUANT)?.[1].toUpperCase() ?? "";
+}
+
+function modelLabel(file) {
+  return [modelName(file), modelQuant(file)].filter(Boolean).join(" · ");
+}
+
+function modelBytes(file) {
+  return models?.files.find((m) => m.file === file)?.bytes;
+}
+
+function showLoading(file) {
+  const bytes = modelBytes(file);
+  modelInfo.textContent = `Loading ${modelLabel(file)}${bytes ? ` (${formatBytes(bytes)})` : ""}…`;
+  modelInfo.classList.add("loading");
+}
+
+function showModelInfo() {
+  if (!models) return;
+  modelInfo.classList.remove("loading");
+  const file = modelSelect.value;
+  const entry = models.files.find((m) => m.file === file);
+  const loaded = models.loaded?.file === file ? models.loaded : null;
+  const parts = [];
+  if (loaded) {
+    parts.push(loaded.description, `${formatBytes(loaded.bytes)} on disk`);
+    parts.push(`context ${loaded.context.toLocaleString()} of ${loaded.trained_context.toLocaleString()} tokens`);
+    parts.push(`loaded in ${loaded.load_seconds.toFixed(1)} s`);
+  } else if (entry) {
+    parts.push(`${formatBytes(entry.bytes)} on disk`, "not loaded");
+  }
+  modelInfo.textContent = parts.join(" · ");
+}
+
+async function loadModels() {
+  try {
+    const response = await fetch("models");
+    if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+    models = await response.json();
+  } catch (error) {
+    modelSelect.replaceChildren(new Option("No models"));
+    modelInfo.textContent = `Couldn't list the models: ${error.message}`;
+    return;
+  }
+  const selected = models.loading ?? models.loaded?.file ?? models.default;
+  modelSelect.replaceChildren(...models.files.map(({ file, bytes }) => {
+    const label = `${modelLabel(file)} · ${formatBytes(bytes)}${file === models.default ? " · default" : ""}`;
+    const option = new Option(label, file, false, file === selected);
+    option.title = file;
+    return option;
+  }));
+  if (models.files.length === 0) modelInfo.textContent = "No .gguf files in models/";
+  else if (models.loading) {
+    // Loading at startup, or for another tab. Check again until it's done.
+    showLoading(models.loading);
+    switching = models.loading;
+    setTimeout(loadModels, 1000);
+  } else {
+    switching = null;
+    showModelInfo();
+  }
+  setBusy(controller !== null);
+}
+
+/// Loads the model picked in the list, so it's ready before the next message.
+async function switchModel() {
+  const file = modelSelect.value;
+  if (file === models.loaded?.file) return showModelInfo();
+  switching = file;
+  setBusy(controller !== null);
+  showLoading(file);
+  try {
+    const response = await fetch("load", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: file }),
+    });
+    if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+    models.loaded = await response.json();
+    if (switching === file) showModelInfo();
+  } catch (error) {
+    // The previous model was freed before loading this one, so nothing is loaded now.
+    models.loaded = null;
+    modelInfo.classList.remove("loading");
+    modelInfo.textContent = `Couldn't load ${modelLabel(file)}: ${error.message}`;
+  } finally {
+    if (switching === file) switching = null;
+    setBusy(controller !== null);
+  }
+}
 
 function showEmpty() {
   const empty = document.createElement("p");
@@ -120,11 +258,13 @@ function scrollDown() {
 function setBusy(busy) {
   stop.hidden = !busy;
   send.hidden = busy;
+  // A model switch waits for the reply in progress, so don't offer one during it.
+  modelSelect.disabled = busy || switching !== null || !models?.files.length;
   updateSend();
 }
 
 function updateSend() {
-  send.disabled = controller !== null || input.value.trim() === "";
+  send.disabled = controller !== null || switching !== null || input.value.trim() === "";
 }
 
 function resizeInput() {
@@ -157,7 +297,7 @@ async function readEvents(response, onEvent) {
 
 async function submit() {
   const text = input.value.trim();
-  if (!text || controller) return;
+  if (!text || controller || switching) return;
   input.value = "";
   resizeInput();
 
@@ -178,14 +318,23 @@ async function submit() {
     const response = await fetch("chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ messages: [{ role: "system", content: SYSTEM_PROMPT }, ...history] }),
+      body: JSON.stringify({
+        model: models?.files.length ? modelSelect.value : undefined,
+        messages: [{ role: "system", content: SYSTEM_PROMPT }, ...history],
+      }),
       signal: thisRequest.signal,
     });
     if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
     await readEvents(response, (event) => {
       const follow = isNearBottom();
       if (event.event === "loading") {
-        note.textContent = "Loading the model…";
+        note.textContent = `Loading ${modelLabel(event.model)}…`;
+        if (models) models.loaded = null;
+        showLoading(event.model);
+      } else if (event.event === "loaded") {
+        note.textContent = "";
+        if (models) models.loaded = event.model;
+        showModelInfo();
       } else if (event.event === "token") {
         content += event.text;
         reply.classList.remove("waiting");
@@ -246,6 +395,9 @@ input.addEventListener("keydown", (event) => {
 });
 
 stop.addEventListener("click", () => controller?.abort());
+
+modelSelect.addEventListener("change", switchModel);
+loadModels();
 
 document.getElementById("new-chat").addEventListener("click", () => {
   const running = controller;

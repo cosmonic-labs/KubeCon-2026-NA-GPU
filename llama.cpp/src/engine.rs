@@ -3,19 +3,19 @@
 //! llama.h leaves generation to the caller: apply the chat template, tokenize, decode, then
 //! sample a token and decode it, until the model ends its turn.
 
-use std::rc::Rc;
 use std::time::Instant;
 
 use futures::lock::Mutex;
 use serde::{Deserialize, Serialize};
 use wasip3::filesystem::preopens::get_directories;
-use wasip3::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+use wasip3::filesystem::types::{Descriptor, DescriptorFlags, DescriptorType, OpenFlags, PathFlags};
 use wit_bindgen::StreamWriter;
 
 use crate::cosmonic::llama_cpp::api::{self as llama, ChatMessage, Context, ContextParams, Model, ModelParams, Sampler};
 
 const MODELS_DIR: &str = "/models";
-const MODEL_FILE: &str = "Llama-3.2-1B-Instruct-Q4_K_M.gguf";
+/// Loaded at startup, and used when a request doesn't name a model.
+pub const DEFAULT_MODEL: &str = "Llama-3.2-1B-Instruct-Q4_K_M.gguf";
 
 const CONTEXT_LENGTH: u32 = 4096;
 const BATCH: u32 = 512;
@@ -31,12 +31,45 @@ pub struct Message {
     pub content: String,
 }
 
+/// A model file in [`MODELS_DIR`].
+#[derive(Serialize)]
+pub struct ModelFile {
+    pub file: String,
+    pub bytes: u64,
+}
+
+/// The model in memory.
+#[derive(Serialize, Clone)]
+pub struct LoadedModel {
+    pub file: String,
+    /// llama.cpp's summary, such as `llama 1B Q4_K - Medium`.
+    pub description: String,
+    pub bytes: u64,
+    /// The context this chat uses, at most [`CONTEXT_LENGTH`].
+    pub context: u32,
+    /// The context the model was trained with.
+    pub trained_context: u32,
+    pub load_seconds: f32,
+}
+
+/// What `GET /models` returns.
+#[derive(Serialize)]
+pub struct Models {
+    pub default: &'static str,
+    pub loaded: Option<LoadedModel>,
+    /// The model being loaded right now, if any.
+    pub loading: Option<String>,
+    pub files: Vec<ModelFile>,
+}
+
 /// What a reply streams to the client.
 #[derive(Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
-    /// The model is still loading.
-    Loading,
+    /// The requested model is loading, after the previous one was freed.
+    Loading { model: String },
+    /// The requested model finished loading.
+    Loaded { model: LoadedModel },
     /// More of the reply.
     Token { text: String },
     Done {
@@ -78,37 +111,100 @@ struct Engine {
     /// The tokens in `ctx`.
     tokens: Vec<u32>,
     model: Model,
+    info: LoadedModel,
 }
 
-thread_local! {
-    static ENGINE: Rc<Mutex<Option<Engine>>> = Rc::default();
+// Statics rather than `thread_local!`: on wasm32-wasip3 each export call runs as its own task,
+// with its own thread-local storage, so state kept there would be gone by the next request.
+static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
+/// A copy of the engine's `info`, readable while a reply holds the engine.
+static LOADED: std::sync::Mutex<Option<LoadedModel>> = std::sync::Mutex::new(None);
+
+/// The file being loaded, readable while the load holds the engine.
+static LOADING: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn set_loaded(info: Option<LoadedModel>) {
+    *LOADED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = info;
 }
 
-/// Loads the model if it isn't yet.
+fn set_loading(file: Option<&str>) {
+    *LOADING.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = file.map(Into::into);
+}
+
+/// Replaces the model in `slot` with `file`. The old one is freed first, so that two never share
+/// GPU memory.
+async fn switch_to(slot: &mut Option<Engine>, file: &str) -> Result<(), String> {
+    *slot = None;
+    set_loaded(None);
+    set_loading(Some(file));
+    let loaded = Engine::load(file).await;
+    set_loading(None);
+    *slot = Some(loaded?);
+    Ok(())
+}
+
+/// Whether `file` can name a model: a `.gguf` file directly in [`MODELS_DIR`].
+pub fn is_model_name(file: &str) -> bool {
+    file.ends_with(".gguf") && !file.starts_with('.') && !file.contains(['/', '\\'])
+}
+
+/// Lists the models in [`MODELS_DIR`], smallest first.
+pub async fn models() -> Result<Models, String> {
+    let dir = models_dir()?;
+    let (entries, listed) = dir.read_directory();
+    let entries = entries.collect().await;
+    listed.await.map_err(|err| format!("listing {MODELS_DIR}: {err:?}"))?;
+    let mut files = Vec::new();
+    for entry in entries {
+        let is_file = matches!(entry.type_, DescriptorType::RegularFile | DescriptorType::SymbolicLink);
+        if !is_file || !is_model_name(&entry.name) {
+            continue;
+        }
+        // A symlink's size is the size of the file it points to.
+        let stat = dir.stat_at(PathFlags::SYMLINK_FOLLOW, entry.name.clone()).await;
+        let stat = stat.map_err(|err| format!("{MODELS_DIR}/{}: {err:?}", entry.name))?;
+        files.push(ModelFile { file: entry.name, bytes: stat.size });
+    }
+    files.sort_by(|a, b| a.bytes.cmp(&b.bytes).then_with(|| a.file.cmp(&b.file)));
+    let loaded = LOADED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    let loading = LOADING.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    Ok(Models { default: DEFAULT_MODEL, loaded, loading, files })
+}
+
+/// Loads the default model if no model is loaded yet.
 pub async fn preload() -> Result<(), String> {
-    let engine = ENGINE.with(Rc::clone);
-    let mut engine = engine.lock().await;
+    let mut engine = ENGINE.lock().await;
     if engine.is_none() {
-        *engine = Some(Engine::load().await?);
+        switch_to(&mut engine, DEFAULT_MODEL).await?;
     }
     Ok(())
 }
 
-/// Streams the reply to `messages`.
-pub async fn chat(messages: Vec<Message>, mut events: Events) {
-    let engine = ENGINE.with(Rc::clone);
-    // Waiting here means the model is loading, or another reply is being generated.
-    let mut guard = engine.lock().await;
-    if guard.is_none() {
-        if !events.send(Event::Loading).await {
+/// Makes `model` the loaded model, unless it already is.
+pub async fn load(model: &str) -> Result<LoadedModel, String> {
+    // Waiting here means another model is loading, or a reply is being generated.
+    let mut engine = ENGINE.lock().await;
+    if engine.as_ref().is_none_or(|engine| engine.info.file != model) {
+        switch_to(&mut engine, model).await?;
+    }
+    Ok(engine.as_ref().expect("loaded above").info.clone())
+}
+
+/// Streams the reply to `messages` from `model`, loading it first if another one is loaded.
+pub async fn chat(model: String, messages: Vec<Message>, mut events: Events) {
+    // Waiting here means a model is loading, or another reply is being generated.
+    let mut guard = ENGINE.lock().await;
+    if guard.as_ref().is_none_or(|engine| engine.info.file != model) {
+        if !events.send(Event::Loading { model: model.clone() }).await {
             return;
         }
-        match Engine::load().await {
-            Ok(loaded) => *guard = Some(loaded),
-            Err(message) => {
-                events.send(Event::Error { message }).await;
-                return;
-            }
+        if let Err(message) = switch_to(&mut guard, &model).await {
+            events.send(Event::Error { message }).await;
+            return;
+        }
+        let info = guard.as_ref().expect("loaded above").info.clone();
+        if !events.send(Event::Loaded { model: info }).await {
+            return;
         }
     }
     let engine = guard.as_mut().expect("loaded above");
@@ -122,20 +218,19 @@ pub async fn chat(messages: Vec<Message>, mut events: Events) {
 }
 
 impl Engine {
-    async fn load() -> Result<Self, String> {
+    async fn load(name: &str) -> Result<Self, String> {
+        if !is_model_name(name) {
+            return Err(format!("{name:?} is not a .gguf file in {MODELS_DIR}"));
+        }
         let start = Instant::now();
-        let (dir, _) = get_directories()
-            .into_iter()
-            .find(|(_, path)| path == MODELS_DIR)
-            .ok_or_else(|| format!("{MODELS_DIR} is not mounted"))?;
+        let dir = models_dir()?;
         let open = async {
-            let file = dir
-                .open_at(PathFlags::SYMLINK_FOLLOW, MODEL_FILE.into(), OpenFlags::empty(), DescriptorFlags::READ)
-                .await?;
+            let file =
+                dir.open_at(PathFlags::SYMLINK_FOLLOW, name.into(), OpenFlags::empty(), DescriptorFlags::READ).await?;
             let size = file.stat().await?.size;
             Ok::<_, wasip3::filesystem::types::ErrorCode>((file, size))
         };
-        let (file, size) = open.await.map_err(|err| format!("{MODELS_DIR}/{MODEL_FILE}: {err:?}"))?;
+        let (file, size) = open.await.map_err(|err| format!("{MODELS_DIR}/{name}: {err:?}"))?;
 
         // The file goes straight from the host to the engine, without passing through this
         // component's memory.
@@ -147,8 +242,17 @@ impl Engine {
         };
         let params = ContextParams { n_ctx, n_batch: BATCH.min(n_ctx), n_ubatch: 0, embeddings: false };
         let ctx = Context::create(&model, Some(params)).await?;
-        eprintln!("loaded {} in {:.1} s", model.description(), start.elapsed().as_secs_f32());
-        Ok(Engine { ctx, tokens: Vec::new(), model })
+        let info = LoadedModel {
+            file: name.into(),
+            description: model.description(),
+            bytes: size,
+            context: n_ctx,
+            trained_context: model.n_ctx_train(),
+            load_seconds: start.elapsed().as_secs_f32(),
+        };
+        eprintln!("loaded {name} ({}) in {:.1} s", info.description, info.load_seconds);
+        set_loaded(Some(info.clone()));
+        Ok(Engine { ctx, tokens: Vec::new(), model, info })
     }
 
     async fn reply(&mut self, messages: Vec<Message>, events: &mut Events) -> Result<(), String> {
@@ -247,6 +351,14 @@ impl Engine {
         }
         Ok(())
     }
+}
+
+fn models_dir() -> Result<Descriptor, String> {
+    get_directories()
+        .into_iter()
+        .find(|(_, path)| path == MODELS_DIR)
+        .map(|(dir, _)| dir)
+        .ok_or_else(|| format!("{MODELS_DIR} is not mounted"))
 }
 
 /// llama.cpp's default sampling, from `common_params_sampling`.
