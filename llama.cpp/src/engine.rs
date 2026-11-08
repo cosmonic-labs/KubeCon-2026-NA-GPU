@@ -13,9 +13,7 @@ use wasip3::filesystem::preopens::get_directories;
 use wasip3::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 use wit_bindgen::StreamWriter;
 
-use crate::cosmonic::llama_cpp::api::{
-    self as llama, ChatMessage, Context, ContextParams, Model, ModelParams, Sampler,
-};
+use crate::cosmonic::llama_cpp::api::{self as llama, ChatMessage, Context, ContextParams, Model, ModelParams, Sampler};
 
 const MODELS_DIR: &str = "/models";
 const MODEL_FILE: &str = "Llama-3.2-1B-Instruct-Q4_K_M.gguf";
@@ -41,9 +39,7 @@ pub enum Event {
     /// The model is still loading.
     Loading,
     /// More of the reply.
-    Token {
-        text: String,
-    },
+    Token { text: String },
     Done {
         /// Why it ended: `stop` if the model finished, `length` if it ran out of room.
         finish: &'static str,
@@ -55,9 +51,7 @@ pub enum Event {
         reply_tokens: usize,
         reply_seconds: f32,
     },
-    Error {
-        message: String,
-    },
+    Error { message: String },
 }
 
 /// The response body: one JSON event per line.
@@ -137,29 +131,20 @@ impl Engine {
             .ok_or_else(|| format!("{MODELS_DIR} is not mounted"))?;
         let open = async {
             let file = dir
-                .open_at(
-                    PathFlags::SYMLINK_FOLLOW,
-                    MODEL_FILE.into(),
-                    OpenFlags::empty(),
-                    DescriptorFlags::READ,
-                )
+                .open_at(PathFlags::SYMLINK_FOLLOW, MODEL_FILE.into(), OpenFlags::empty(), DescriptorFlags::READ)
                 .await?;
             let size = file.stat().await?.size;
             Ok::<_, wasip3::filesystem::types::ErrorCode>((file, size))
         };
-        let (file, size) = open
-            .await
-            .map_err(|err| format!("{MODELS_DIR}/{MODEL_FILE}: {err:?}"))?;
+        let (file, size) = open.await.map_err(|err| format!("{MODELS_DIR}/{MODEL_FILE}: {err:?}"))?;
 
         // The file goes straight from the host to the engine, without passing through this
         // component's memory.
         let (data, read_result) = file.read_via_stream(0);
-        let (mut loaded, model) =
-            Model::create(data, size, Some(ModelParams { n_gpu_layers: -1 })).await;
+        let (mut loaded, model) = Model::create(data, size, Some(ModelParams { n_gpu_layers: -1 })).await;
         // The engine reports how much of the file it has loaded; nothing here shows it.
         let progress = async { while loaded.next().await.is_some() {} };
-        let ((), model, read) =
-            futures::future::join3(progress, model.into_future(), read_result.into_future()).await;
+        let ((), model, read) = futures::future::join3(progress, model.into_future(), read_result.into_future()).await;
         // A failed read ends the stream early, so the engine's error would only say the file
         // was short.
         read.map_err(|err| format!("{MODELS_DIR}/{MODEL_FILE}: {err:?}"))?;
@@ -168,23 +153,10 @@ impl Engine {
             0 => CONTEXT_LENGTH,
             trained => trained.min(CONTEXT_LENGTH),
         };
-        let params = ContextParams {
-            n_ctx,
-            n_batch: BATCH.min(n_ctx),
-            n_ubatch: 0,
-            embeddings: false,
-        };
+        let params = ContextParams { n_ctx, n_batch: BATCH.min(n_ctx), n_ubatch: 0, embeddings: false };
         let ctx = Context::create(&model, Some(params)).await?;
-        eprintln!(
-            "loaded {} in {:.1} s",
-            model.description(),
-            start.elapsed().as_secs_f32()
-        );
-        Ok(Engine {
-            ctx,
-            tokens: Vec::new(),
-            model,
-        })
+        eprintln!("loaded {} in {:.1} s", model.description(), start.elapsed().as_secs_f32());
+        Ok(Engine { ctx, tokens: Vec::new(), model })
     }
 
     async fn reply(&mut self, messages: Vec<Message>, events: &mut Events) -> Result<(), String> {
@@ -219,32 +191,23 @@ impl Engine {
         if !text.is_empty() && !events.send(Event::Token { text }).await {
             return Ok(());
         }
-        events
-            .send(Event::Done {
-                finish,
-                prompt_tokens: prompt.len(),
-                cached_tokens,
-                dropped_messages,
-                reply_tokens,
-                reply_seconds: start.elapsed().as_secs_f32(),
-            })
-            .await;
+        events.send(Event::Done {
+            finish,
+            prompt_tokens: prompt.len(),
+            cached_tokens,
+            dropped_messages,
+            reply_tokens,
+            reply_seconds: start.elapsed().as_secs_f32(),
+        })
+        .await;
         Ok(())
     }
 
     /// Tokenizes the chat, dropping its oldest turns until it leaves room for a reply.
     fn prompt(&self, messages: Vec<Message>) -> Result<(Vec<u32>, usize), String> {
-        let template = self
-            .model
-            .chat_template(None)
-            .ok_or("the model has no chat template")?;
-        let mut chat: Vec<ChatMessage> = messages
-            .into_iter()
-            .map(|m| ChatMessage {
-                role: m.role,
-                content: m.content,
-            })
-            .collect();
+        let template = self.model.chat_template(None).ok_or("the model has no chat template")?;
+        let mut chat: Vec<ChatMessage> =
+            messages.into_iter().map(|m| ChatMessage { role: m.role, content: m.content }).collect();
         let room = (self.ctx.n_ctx() as usize).saturating_sub(MIN_REPLY_ROOM);
         let mut dropped = 0;
         loop {
@@ -253,15 +216,9 @@ impl Engine {
             if tokens.len() <= room {
                 return Ok((tokens, dropped));
             }
-            let oldest = chat
-                .iter()
-                .position(|m| m.role != "system")
-                .filter(|i| i + 1 < chat.len());
+            let oldest = chat.iter().position(|m| m.role != "system").filter(|i| i + 1 < chat.len());
             let Some(oldest) = oldest else {
-                return Err(format!(
-                    "the message is too long: {} tokens, the limit is {room}",
-                    tokens.len()
-                ));
+                return Err(format!("the message is too long: {} tokens, the limit is {room}", tokens.len()));
             };
             chat.remove(oldest);
             dropped += 1;
@@ -271,12 +228,7 @@ impl Engine {
     /// Keeps what the context shares with `prompt`, and returns how many tokens that is. The last
     /// token of the prompt is always decoded again, as sampling needs its logits.
     async fn reuse_prefix(&mut self, prompt: &[u32]) -> usize {
-        let shared = self
-            .tokens
-            .iter()
-            .zip(prompt)
-            .take_while(|(held, wanted)| held == wanted)
-            .count();
+        let shared = self.tokens.iter().zip(prompt).take_while(|(held, wanted)| held == wanted).count();
         let shared = shared.min(prompt.len().saturating_sub(1));
         // With sliding-window attention, the first token after the prefix attends to the n-swa
         // before it, which the context may have dropped.
@@ -298,10 +250,7 @@ impl Engine {
 
     async fn decode(&mut self, tokens: &[u32]) -> Result<(), String> {
         for chunk in tokens.chunks(self.ctx.n_batch() as usize) {
-            self.ctx
-                .decode(chunk.to_vec())
-                .await
-                .map_err(|code| format!("decode failed with code {code}"))?;
+            self.ctx.decode(chunk.to_vec()).await.map_err(|code| format!("decode failed with code {code}"))?;
             self.tokens.extend_from_slice(chunk);
         }
         Ok(())

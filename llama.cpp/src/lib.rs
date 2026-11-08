@@ -62,11 +62,7 @@ struct ChatRequest {
 
 async fn chat(request: Request) -> Result<Response, ErrorCode> {
     let Some(body) = read_body(request).await else {
-        return respond(
-            413,
-            "text/plain; charset=utf-8",
-            "request too large\n".into(),
-        );
+        return respond(413, "text/plain; charset=utf-8", "request too large\n".into());
     };
     let messages = match parse(&body) {
         Ok(messages) => messages,
@@ -82,11 +78,7 @@ async fn chat(request: Request) -> Result<Response, ErrorCode> {
 
 fn parse(body: &[u8]) -> Result<Vec<engine::Message>, String> {
     let request: ChatRequest = serde_json::from_slice(body).map_err(|err| err.to_string())?;
-    if request
-        .messages
-        .iter()
-        .any(|m| !["system", "user", "assistant"].contains(&m.role.as_str()))
-    {
+    if request.messages.iter().any(|m| !["system", "user", "assistant"].contains(&m.role.as_str())) {
         return Err("a message's role must be system, user or assistant".into());
     }
     if request.messages.last().is_none_or(|m| m.role != "user") {
@@ -128,9 +120,8 @@ fn new_response(
     content_type: &str,
     body: wit_bindgen::StreamReader<u8>,
 ) -> Result<(Response, wit_bindgen::FutureReader<Result<(), ErrorCode>>), ErrorCode> {
-    let headers =
-        Fields::from_list(&[("content-type".to_string(), content_type.as_bytes().to_vec())])
-            .map_err(|err| ErrorCode::InternalError(Some(format!("invalid headers: {err}"))))?;
+    let headers = Fields::from_list(&[("content-type".to_string(), content_type.as_bytes().to_vec())])
+        .map_err(|err| ErrorCode::InternalError(Some(format!("invalid headers: {err}"))))?;
     let (_trailers_tx, trailers_rx) = http_future::new(|| Ok(None));
     Ok(Response::new(headers, Some(body), trailers_rx))
 }
