@@ -1,0 +1,4 @@
+# The engine in vendor/ was built from this interface, so resolve it from the copy next to
+# the engine rather than a registry.
+[overrides]
+"cosmonic:llama-cpp" = { path = "vendor/wit/llama-cpp" }

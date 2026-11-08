@@ -8,7 +8,7 @@
 
 wit_bindgen::generate!({
     world: "example:sd-turbo/sd-turbo",
-    // The onnxruntime:onnxruntime package is resolved from wit/deps.
+    // `wash build` copies onnxruntime:onnxruntime into wit/deps from vendor/wit (see wkg.toml).
     path: "wit",
     generate_all,
 });
