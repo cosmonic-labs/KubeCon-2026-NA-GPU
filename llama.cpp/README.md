@@ -6,15 +6,23 @@ A chatbot served over HTTP from a WebAssembly component. The component runs [lla
 
 Put the model in `models/`. It's gitignored, as it's 800 MB:
 
-```shell
+```sh
 curl -L --create-dirs -o models/Llama-3.2-1B-Instruct-Q4_K_M.gguf \
   https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 ```
 
 Then start it, and open http://localhost:8000/:
 
-```shell
+```sh
 wash dev
+```
+
+Or chat from another terminal. The reply streams back as one JSON event per line, and `jq` keeps just the text:
+
+```sh
+curl -sN http://localhost:8000/chat -H 'content-type: application/json' \
+  -d '{"messages":[{"role":"user","content":"In one sentence, what is WebGPU?"}]}' \
+  | jq -j 'select(.event == "token") | .text'; echo
 ```
 
 You need `wash`, `wac`, Rust (`rust-toolchain.toml` pins the nightly and its `wasm32-wasip3` target), and a GPU.
