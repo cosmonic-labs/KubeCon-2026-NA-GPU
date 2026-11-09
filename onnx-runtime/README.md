@@ -22,5 +22,6 @@ done
 Start the demo, then open <http://localhost:8000>:
 
 ```bash
+wash wit fetch
 wash dev
 ```

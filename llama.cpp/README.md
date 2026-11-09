@@ -14,6 +14,7 @@ curl -L --create-dirs -o models/Llama-3.2-1B-Instruct-Q4_K_M.gguf \
 Then start it, and open http://localhost:8000/:
 
 ```shell
+wash wit fetch
 wash dev
 ```
 
