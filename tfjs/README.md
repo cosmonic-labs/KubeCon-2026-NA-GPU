@@ -11,4 +11,4 @@ npm install
 wash dev
 ```
 
-Open <http://localhost:8000>, pick a content image and a style image, and click **Stylize**.
+Open <http://localhost:8003>, pick a content image and a style image, and click **Stylize**.

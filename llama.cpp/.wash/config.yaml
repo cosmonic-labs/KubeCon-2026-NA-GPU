@@ -6,6 +6,7 @@ build:
   component_path: target/llama-chat.wasm
 
 dev:
+  address: 0.0.0.0:8001
   # Running as a service gives one long-lived instance that also takes the HTTP
   # traffic, so the model stays loaded between requests.
   service_file: target/llama-chat.wasm

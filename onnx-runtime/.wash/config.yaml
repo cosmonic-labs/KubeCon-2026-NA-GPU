@@ -6,6 +6,7 @@ build:
   component_path: target/sd-turbo.wasm
 
 dev:
+  address: 0.0.0.0:8002
   wasi_webgpu: true
   # ONNX Runtime uses wasm exceptions, and both components use the async component model.
   wasm_proposals: [exception-handling, component-model-async]

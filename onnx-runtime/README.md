@@ -19,7 +19,7 @@ for f in text_encoder/model.onnx unet/model.onnx vae_decoder/model.onnx tokenize
 done
 ```
 
-Start the demo, then open <http://localhost:8000>:
+Start the demo, then open <http://localhost:8002>:
 
 ```bash
 wash wit fetch

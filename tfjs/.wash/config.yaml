@@ -8,5 +8,6 @@ build:
   component_path: component/dist/component.wasm
 
 dev:
+  address: 0.0.0.0:8003
   wasi_webgpu: true
   service_file: service/dist/service.wasm

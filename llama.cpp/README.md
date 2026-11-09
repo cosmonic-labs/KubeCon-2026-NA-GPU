@@ -11,7 +11,7 @@ curl -L --create-dirs -o models/Llama-3.2-1B-Instruct-Q4_K_M.gguf \
   https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 ```
 
-Then start it, and open http://localhost:8000/:
+Then start it, and open http://localhost:8001/:
 
 ```shell
 wash wit fetch
